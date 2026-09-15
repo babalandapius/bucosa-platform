@@ -1,0 +1,15 @@
+# Dependencies
+**/node_modules/
+
+# Environment Files
+**/.env
+**/.env.local
+
+# Build Outputs
+frontend/dist/
+frontend/build/
+
+
+# Operating System Files
+.DS_Store
+Thumbs.db
