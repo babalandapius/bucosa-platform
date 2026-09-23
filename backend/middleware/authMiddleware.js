@@ -1,6 +1,43 @@
 import jwt from 'jsonwebtoken';
 import db from '../config/db.js';
 
+
+export const protectAny = async (req, res, next) => {
+  let token;
+
+  // 1. Extract Bearer token from the Authorization header
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    try {
+      token = req.headers.authorization.split(' ')[1];
+
+      // 2. Verify token signature using your JWT secret
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // 3. Attach decoded user payload (id, userType/role, email) to request object
+      req.user = decoded;
+
+      // 4. Proceed to the next controller function (e.g., getCurrentUser)
+      return next();
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: 'Not authorized, token failed or expired.',
+      });
+    }
+  }
+
+  // 5. Reject if no token was provided in headers
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      message: 'Not authorized, no token provided.',
+    });
+  }
+};
+
 // Protect Admin Routes (Execs & Super Admins Only)
 export const protectAdmin = async (req, res, next) => {
   let token;

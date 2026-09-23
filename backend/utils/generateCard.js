@@ -7,11 +7,6 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/**
- * Generates an official BUCoSA Printable PDF Membership Card
- * @param {Object} student - { id, membership_id, student_id, full_name, course, year_of_study }
- * @returns {Promise<string>} Relative URL path to saved PDF document
- */
 export const generateMembershipCard = async (student) => {
   return new Promise(async (resolve, reject) => {
     try {

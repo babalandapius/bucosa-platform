@@ -10,12 +10,6 @@ const generateToken = (payload) => {
   });
 };
 
-// ==========================================
-// 1. ADMIN / EXECUTIVE AUTHENTICATION LOGIC
-// ==========================================
-
-// @desc    Register a new Admin/Executive (Protected: Admin Only)
-// @route   POST /api/v1/auth/admin/signup
 export const registerAdmin = async (req, res) => {
   const { username, email, password, role } = req.body;
 
@@ -56,8 +50,6 @@ export const registerAdmin = async (req, res) => {
   }
 };
 
-// @desc    Admin / Executive Login
-// @route   POST /api/v1/auth/admin/login
 export const adminLogin = async (req, res) => {
   const { username, password } = req.body;
 
@@ -95,23 +87,19 @@ export const adminLogin = async (req, res) => {
   }
 };
 
-// ==========================================
-// 2. STUDENT MEMBER AUTHENTICATION LOGIC
-// ==========================================
 
-// @desc    Register a new Student Member (Public)
-// @route   POST /api/v1/auth/student/signup
 export const registerStudent = async (req, res) => {
-  const { student_no, full_name, email, password, year_of_study } = req.body;
+  console.log('User request fro the sign up', req.body);
+  const { student_id, full_name, email, password, year_of_study, course } = req.body;
 
-  if (!student_no || !full_name || !email || !password) {
+  if (!student_id || !full_name || !email || !password || !course) {
     return res.status(400).json({ success: false, message: 'Please fill in all required fields.' });
   }
 
   try {
     const [existing] = await db.query(
-      'SELECT id FROM students WHERE student_no = ? OR email = ?',
-      [student_no, email]
+      'SELECT id FROM students WHERE student_id = ? OR email = ?',
+      [student_id, email]
     );
 
     if (existing.length > 0) {
@@ -122,8 +110,8 @@ export const registerStudent = async (req, res) => {
     const passwordHash = await bcrypt.hash(password, salt);
 
     const [result] = await db.query(
-      'INSERT INTO students (student_no, full_name, email, password_hash, year_of_study) VALUES (?, ?, ?, ?, ?)',
-      [student_no, full_name, email, passwordHash, year_of_study || 1]
+      'INSERT INTO students (student_id, full_name, email, password_hash, year_of_study, course) VALUES (?, ?, ?, ?, ?, ?)',
+      [student_id, full_name, email, passwordHash, year_of_study, course || 1]
     );
 
     const newId = result.insertId;
@@ -133,7 +121,7 @@ export const registerStudent = async (req, res) => {
       success: true,
       message: 'BUCoSA student registration successful.',
       token,
-      user: { id: newId, student_no, full_name, email, year_of_study: year_of_study || 1, userType: 'student' }
+      user: { id: newId, student_id, full_name, email, year_of_study: year_of_study, course: course || 1, userType: 'student' }
     });
       // 5. Generate Automated PDF Membership Card
     const cardUrl = await generateMembershipCard(studentData);
@@ -199,11 +187,50 @@ export const studentLogin = async (req, res) => {
 };
 
 
-export const getCurrentUser = async (req, res) => {
-  res.status(200).json({
-    success: true,
-    user: req.user
-  });
+export const getCurrentUser = async (req, res, next) => {
+  try {
+    const { id, userType } = req.user; // Extracted from JWT by protectAny
+
+    if (userType === 'student') {
+      const [students] = await db.query(
+        `SELECT id, student_id, full_name, email, course, year_of_study, created_at 
+         FROM students WHERE id = ?`,
+        [id]
+      );
+
+      if (students.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: 'Student record not found.',
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        user: { ...students[0], userType: 'student' },
+      });
+    }
+
+    // Admin lookup fallback
+    const [admins] = await db.query(
+      `SELECT id, username, email, role FROM admin_users WHERE id = ?`,
+      [id]
+    );
+
+    if (admins.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Admin record not found.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      user: { ...admins[0], userType: admins.role },
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 

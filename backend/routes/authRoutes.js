@@ -1,4 +1,9 @@
 import express from 'express';
+import { 
+  protectAny, 
+  protectAdmin, 
+  protectStudent 
+} from '../middleware/authMiddleware.js';
 import {
   adminLogin,
   registerAdmin,
@@ -8,7 +13,6 @@ import {
   deleteUser,
   getUsers
 } from '../controllers/authController.js';
-import { protectAdmin, protectStudent } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
@@ -21,8 +25,9 @@ router.post('/admin/login', adminLogin);
 router.post('/admin/signup', protectAdmin, registerAdmin);
 
 // Session Check (Accessible by both Admins and Students)
-router.get('/me', protectAdmin, protectStudent, getCurrentUser);
+router.get('/me', protectAny, getCurrentUser);
 
+// Admin Management
 router.get('/users', protectAdmin, getUsers);
 router.delete('/users/:id', protectAdmin, deleteUser);
 
