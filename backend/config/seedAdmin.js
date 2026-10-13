@@ -2,9 +2,14 @@ import bcrypt from 'bcryptjs';
 import db from './db.js';
 
 const seedSuperAdmin = async () => {
-  const username = 'admin';
-  const email = 'bucosa.busitema@gmail.com';
-  const rawPassword = 'AdminPassword2026!'; 
+  const username = process.env.SEED_ADMIN_USERNAME;
+  const email = process.env.SEED_ADMIN_EMAIL;
+  const rawPassword = process.env.SEED_ADMIN_PASSWORD;
+
+  if (!username || !email || !rawPassword) {
+    console.error('Set SEED_ADMIN_USERNAME, SEED_ADMIN_EMAIL, and SEED_ADMIN_PASSWORD in backend/.env before seeding.');
+    process.exit(1);
+  }
 
   try {
     const [existing] = await db.query('SELECT * FROM admin_users WHERE username = ? OR email = ?', [username, email]);
@@ -24,7 +29,6 @@ const seedSuperAdmin = async () => {
 
     console.log('✅ Default Super Admin created successfully!');
     console.log(`👤 Username: ${username}`);
-    console.log(`🔑 Password: ${rawPassword}`);
     process.exit(0);
   } catch (error) {
     console.error('❌ Error seeding admin:', error.message);

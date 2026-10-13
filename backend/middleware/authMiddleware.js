@@ -70,6 +70,17 @@ export const protectAdmin = async (req, res, next) => {
   }
 };
 
+export const requireAdminApprover = (req, res, next) => {
+  const role = String(req.user?.role || '').toLowerCase();
+  if (role !== 'admin' && role !== 'super_admin') {
+    return res.status(403).json({
+      success: false,
+      message: 'Only an admin can review membership applications.',
+    });
+  }
+  return next();
+};
+
 // Protect Student Routes (Registered Students)
 export const protectStudent = async (req, res, next) => {
   let token;
@@ -80,7 +91,7 @@ export const protectStudent = async (req, res, next) => {
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
       const [students] = await db.query(
-        'SELECT id, student_no, full_name, email, year_of_study FROM students WHERE id = ?',
+        'SELECT id, student_id, full_name, email, year_of_study FROM students WHERE id = ?',
         [decoded.id]
       );
 

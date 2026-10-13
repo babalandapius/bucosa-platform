@@ -1,7 +1,7 @@
 import bcrypt from 'bcryptjs';
+import { createHash, randomBytes } from 'crypto';
 import jwt from 'jsonwebtoken';
 import db from '../config/db.js';
-import { generateMembershipCard } from '../utils/generateCard.js';
 
 // Helper function to generate JWT Token
 const generateToken = (payload) => {
@@ -88,60 +88,225 @@ export const adminLogin = async (req, res) => {
 };
 
 
-export const registerStudent = async (req, res) => {
-  console.log('User request fro the sign up', req.body);
-  const { student_id, full_name, email, password, year_of_study, course } = req.body;
+export const registerStudent = async (req, res, next) => {
+  return createMembershipApplication(req, res, false, next);
+};
 
-  if (!student_id || !full_name || !email || !password || !course) {
-    return res.status(400).json({ success: false, message: 'Please fill in all required fields.' });
+const createMembershipApplication = async (req, res, createdByStaff, next) => {
+  const { student_id, full_name, email, year_of_study, course } = req.body;
+
+  const courseId = Number(course);
+  const year = year_of_study ? Number(year_of_study) : null;
+  if (
+    !String(student_id || '').trim() ||
+    !String(full_name || '').trim() ||
+    !String(email || '').trim() ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim()) ||
+    !Number.isInteger(courseId) ||
+    courseId < 1 ||
+    (year !== null && (!Number.isInteger(year) || year < 1 || year > 10))
+  ) {
+    return res.status(400).json({ success: false, message: 'Please provide student ID, full name, email, and course.' });
+  }
+
+  const normalizedEmail = String(email).trim().toLowerCase();
+  const activationCode = randomBytes(32).toString('hex');
+  const activationCodeHash = createHash('sha256').update(activationCode).digest('hex');
+
+  try {
+    const [existingStudents] = await db.query(
+      'SELECT id FROM students WHERE student_id = ? OR email = ?',
+      [String(student_id).trim(), normalizedEmail]
+    );
+    const [existingApplications] = await db.query(
+      `SELECT id FROM membership_applications
+       WHERE (student_id = ? OR email = ?) AND status IN ('pending', 'approved', 'completed')
+       LIMIT 1`,
+      [String(student_id).trim(), normalizedEmail]
+    );
+
+    if (existingStudents.length || existingApplications.length) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account or active membership application already exists for this student ID or email.',
+      });
+    }
+
+    const [result] = await db.query(
+      `INSERT INTO membership_applications
+       (student_id, full_name, email, year_of_study, course, activation_code_hash, submitted_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        String(student_id).trim(),
+        String(full_name).trim(),
+        normalizedEmail,
+        year,
+        courseId,
+        activationCodeHash,
+        createdByStaff ? req.user.id : null,
+      ]
+    );
+
+    return res.status(201).json({
+      success: true,
+      message: 'Membership application submitted. An admin must approve it before the student can set a password.',
+      applicationId: result.insertId,
+      activationCode,
+    });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const createAdminMembershipApplication = (req, res, next) =>
+  createMembershipApplication(req, res, true, next);
+
+export const getMembershipApplications = async (req, res, next) => {
+  try {
+    const [applications] = await db.query(
+      `SELECT id, student_id, full_name, email, year_of_study, course, status, created_at
+       FROM membership_applications
+       WHERE status = 'pending'
+       ORDER BY created_at ASC`
+    );
+    return res.status(200).json({ success: true, applications });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const reviewMembershipApplication = async (req, res, next) => {
+  const applicationId = Number(req.params.id);
+  const { decision } = req.body;
+
+  if (!Number.isInteger(applicationId) || applicationId < 1 || !['approved', 'rejected'].includes(decision)) {
+    return res.status(400).json({ success: false, message: 'Provide a valid application ID and decision.' });
   }
 
   try {
-    const [existing] = await db.query(
-      'SELECT id FROM students WHERE student_id = ? OR email = ?',
-      [student_id, email]
+    const [result] = await db.query(
+      `UPDATE membership_applications
+       SET status = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'pending'`,
+      [decision, req.user.id, applicationId]
     );
 
-    if (existing.length > 0) {
-      return res.status(400).json({ success: false, message: 'Student number or email already registered.' });
+    if (!result.affectedRows) {
+      return res.status(404).json({ success: false, message: 'Pending application not found.' });
     }
 
-    const salt = await bcrypt.genSalt(10);
-    const passwordHash = await bcrypt.hash(password, salt);
+    return res.status(200).json({ success: true, message: `Application ${decision}.` });
+  } catch (error) {
+    return next(error);
+  }
+};
 
-    const [result] = await db.query(
-      'INSERT INTO students (student_id, full_name, email, password_hash, year_of_study, course) VALUES (?, ?, ?, ?, ?, ?)',
-      [student_id, full_name, email, passwordHash, year_of_study, course || 1]
+export const getMembershipApplicationStatus = async (req, res, next) => {
+  const { activationCode } = req.body;
+  if (!activationCode || typeof activationCode !== 'string') {
+    return res.status(400).json({ success: false, message: 'Provide your application access code.' });
+  }
+
+  try {
+    const activationCodeHash = createHash('sha256').update(activationCode).digest('hex');
+    const [applications] = await db.query(
+      `SELECT status FROM membership_applications WHERE activation_code_hash = ? LIMIT 1`,
+      [activationCodeHash]
     );
 
-    const newId = result.insertId;
-    const token = generateToken({ id: newId, userType: 'student' });
+    if (!applications.length) {
+      return res.status(404).json({ success: false, message: 'Application not found. Check your access code.' });
+    }
 
-    res.status(201).json({
+    return res.status(200).json({ success: true, status: applications[0].status });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const completeStudentRegistration = async (req, res, next) => {
+  const { activationCode, password } = req.body;
+  if (!activationCode || typeof activationCode !== 'string' || !password || password.length < 8) {
+    return res.status(400).json({ success: false, message: 'Provide your access code and a password of at least 8 characters.' });
+  }
+
+  const connection = await db.getConnection();
+  try {
+    const activationCodeHash = createHash('sha256').update(activationCode).digest('hex');
+    await connection.beginTransaction();
+
+    const [applications] = await connection.query(
+      `SELECT id, student_id, full_name, email, year_of_study, course, status
+       FROM membership_applications
+       WHERE activation_code_hash = ?
+       FOR UPDATE`,
+      [activationCodeHash]
+    );
+
+    if (!applications.length) {
+      await connection.rollback();
+      return res.status(404).json({ success: false, message: 'Application not found. Check your access code.' });
+    }
+
+    const application = applications[0];
+    if (application.status !== 'approved') {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        message: application.status === 'pending'
+          ? 'Your application is still awaiting admin approval.'
+          : 'This application cannot be activated.',
+      });
+    }
+
+    const [existingStudents] = await connection.query(
+      'SELECT id FROM students WHERE student_id = ? OR email = ? LIMIT 1',
+      [application.student_id, application.email]
+    );
+    if (existingStudents.length) {
+      await connection.rollback();
+      return res.status(409).json({ success: false, message: 'A student account already exists for this application.' });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const [result] = await connection.query(
+      `INSERT INTO students (student_id, full_name, email, password_hash, year_of_study, course)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        application.student_id,
+        application.full_name,
+        application.email,
+        passwordHash,
+        application.year_of_study,
+        application.course,
+      ]
+    );
+    await connection.query(
+      `UPDATE membership_applications SET status = 'completed', reviewed_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [application.id]
+    );
+    await connection.commit();
+
+    return res.status(201).json({
       success: true,
-      message: 'BUCoSA student registration successful.',
-      token,
-      user: { id: newId, student_id, full_name, email, year_of_study: year_of_study, course: course || 1, userType: 'student' }
-    });
-      // 5. Generate Automated PDF Membership Card
-    const cardUrl = await generateMembershipCard(studentData);
-
-    // 6. Update Database Record with card_url Path
-    await db.query('UPDATE students SET card_url = ? WHERE id = ?', [cardUrl, result.insertId]);
-
-    res.status(201).json({
-      success: true,
-      message: 'Student account created and membership card generated successfully.',
-      data: {
-        ...studentData,
-        email,
-        card_url: cardUrl,
+      message: 'Membership activated successfully.',
+      user: {
+        id: result.insertId,
+        student_id: application.student_id,
+        full_name: application.full_name,
+        email: application.email,
+        year_of_study: application.year_of_study,
+        course: application.course,
+        userType: 'student',
       },
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Server error during student registration.', error: error.message });
+    await connection.rollback();
+    return next(error);
+  } finally {
+    connection.release();
   }
-}
+};
 
 // @desc    Student Member Login
 // @route   POST /api/v1/auth/student/login
@@ -174,7 +339,7 @@ export const studentLogin = async (req, res) => {
       token,
       user: {
         id: student.id,
-        student_no: student.student_no,
+        student_id: student.student_id,
         full_name: student.full_name,
         email: student.email,
         year_of_study: student.year_of_study,

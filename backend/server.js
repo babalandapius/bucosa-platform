@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 
 // Config & Rate Limiters
 import { initSocket } from './config/socket.js';
+import { ensureMembershipApplicationsTable } from './config/membershipApplications.js';
 import { authLimiter, publicFormLimiter } from './middleware/rateLimiter.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 
@@ -38,7 +39,9 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // 3. Rate Limiters (MUST be placed before the routes they protect)
-app.use('/api/v1/auth/login', authLimiter);
+app.use('/api/v1/auth/student/login', authLimiter);
+app.use('/api/v1/auth/admin/login', authLimiter);
+app.use('/api/v1/auth/student/signup', publicFormLimiter);
 app.use('/api/v1/contact', publicFormLimiter);
 
 // 4. Feature Routes
@@ -56,6 +59,13 @@ app.use(errorHandler);  // Catches errors thrown by controllers
 
 const PORT = process.env.PORT || 5000;
 
-httpServer.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT} with Socket.io active`);
-});
+ensureMembershipApplicationsTable()
+  .then(() => {
+    httpServer.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT} with Socket.io active`);
+    });
+  })
+  .catch((error) => {
+    console.error('Unable to initialize membership application storage:', error.message);
+    process.exitCode = 1;
+  });
